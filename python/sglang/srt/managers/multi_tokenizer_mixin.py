@@ -130,6 +130,16 @@ def _handle_output_by_index(output, i):
             spec_verify_ct=(
                 [output.spec_verify_ct[i]] if len(output.spec_verify_ct) > i else None
             ),
+            expert_layer_activations=(
+                [output.expert_layer_activations[i]]
+                if len(output.expert_layer_activations) > i
+                else None
+            ),
+            expert_layer_history=(
+                [output.expert_layer_history[i]]
+                if len(output.expert_layer_history) > i
+                else None
+            ),
             input_token_logprobs_val=(
                 [output.input_token_logprobs_val[i]]
                 if output.input_token_logprobs_val
@@ -245,6 +255,16 @@ def _handle_output_by_index(output, i):
             ),
             spec_verify_ct=(
                 [output.spec_verify_ct[i]] if len(output.spec_verify_ct) > i else None
+            ),
+            expert_layer_activations=(
+                [output.expert_layer_activations[i]]
+                if len(output.expert_layer_activations) > i
+                else None
+            ),
+            expert_layer_history=(
+                [output.expert_layer_history[i]]
+                if len(output.expert_layer_history) > i
+                else None
             ),
             input_token_logprobs_val=(
                 [output.input_token_logprobs_val[i]]

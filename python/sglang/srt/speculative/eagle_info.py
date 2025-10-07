@@ -1,7 +1,7 @@
 import logging
 from copy import copy
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -178,6 +178,7 @@ class EagleVerifyInput(SpecInput):
         token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
         page_size: int,
         vocab_mask: Optional[torch.Tensor] = None,  # For grammar
+        forward_batch: Optional["ForwardBatch"] = None,
     ) -> torch.Tensor:
         """
         Verify and find accepted tokens based on logits output and batch
@@ -377,6 +378,58 @@ class EagleVerifyInput(SpecInput):
                 else:
                     unfinished_accept_index.append(accept_index[i])
             req.spec_verify_ct += 1
+
+            # Accumulate expert activations if enabled
+            if forward_batch is not None and forward_batch.expert_activations is not None:
+                # Create per-verify snapshot with tree structure metadata
+                per_verify_snapshot: Dict = {
+                    "tree_structure": {
+                        "draft_token_num": self.draft_token_num,
+                        "spec_steps": self.spec_steps,
+                        "retrive_next_token": self.retrive_next_token.cpu().tolist(),
+                        "retrive_next_sibling": self.retrive_next_sibling.cpu().tolist(),
+                        "retrive_index": self.retrive_index.cpu().tolist(),
+                        "positions": self.positions.reshape(bs, self.draft_token_num).cpu().tolist(),
+                    },
+                    "layers": {}
+                }
+
+                for layer_id, snapshot in forward_batch.expert_activations.items():
+                    assignments = snapshot.topk_ids
+                    if assignments.numel() == 0:
+                        continue
+
+                    # Store detailed history
+                    layer_history: Dict[str, List[List[float]]] = {
+                        "topk_ids": assignments.tolist()
+                    }
+                    if snapshot.topk_weights is not None:
+                        layer_history["topk_weights"] = snapshot.topk_weights.tolist()
+                    per_verify_snapshot["layers"][layer_id] = layer_history
+
+                    # Accumulate counts
+                    valid_assignments = assignments[assignments >= 0]
+                    if valid_assignments.numel() == 0:
+                        continue
+                    counts = torch.bincount(
+                        valid_assignments.view(-1).to(torch.long),
+                        minlength=snapshot.num_experts,
+                    ).tolist()
+
+                    existing = req.expert_layer_activations.get(layer_id)
+                    if existing is None:
+                        req.expert_layer_activations[layer_id] = counts
+                    else:
+                        if len(existing) < len(counts):
+                            existing.extend([0] * (len(counts) - len(existing)))
+                        req.expert_layer_activations[layer_id] = [
+                            a + b for a, b in zip(existing, counts)
+                        ]
+
+                if per_verify_snapshot:
+                    req.expert_layer_history.append(per_verify_snapshot)
+
+                forward_batch.expert_activations.clear()
 
         if has_finished:
             accept_length = (accept_index != -1).sum(dim=1) - 1

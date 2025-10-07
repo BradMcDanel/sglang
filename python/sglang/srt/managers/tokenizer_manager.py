@@ -1390,6 +1390,16 @@ class TokenizerManager(TokenizerCommunicatorMixin):
             if state.finished:
                 if self.server_args.speculative_algorithm:
                     meta_info["spec_verify_ct"] = recv_obj.spec_verify_ct[i]
+                # Add expert layer activations if available (accumulated across all verify passes)
+                if hasattr(recv_obj, 'expert_layer_activations') and i < len(recv_obj.expert_layer_activations):
+                    expert_acts = recv_obj.expert_layer_activations[i]
+                    if expert_acts:  # Only add if not None/empty
+                        meta_info["expert_layer_activations"] = expert_acts
+                        print(f"[DEBUG] Added expert_layer_activations to meta_info: {len(expert_acts)} layers")
+                if hasattr(recv_obj, 'expert_layer_history') and i < len(recv_obj.expert_layer_history):
+                    expert_history = recv_obj.expert_layer_history[i]
+                    if expert_history:
+                        meta_info["expert_layer_history"] = expert_history
                 state.finished_time = time.time()
                 meta_info["e2e_latency"] = state.finished_time - state.created_time
 

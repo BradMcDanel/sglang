@@ -630,6 +630,13 @@ class Req:
         # This is used to compute the average acceptance length per request.
         self.spec_verify_ct = 0
 
+        # Expert activation tracking per layer (MoE models)
+        # Format: {layer_id: [expert_count_1, expert_count_2, ...]}
+        self.expert_layer_activations: Dict[int, List[int]] = {}
+        # History of expert assignments per verify cycle
+        # Format: [{"tree_structure": {...}, "layers": {layer_id: {"topk_ids": [[...]], "topk_weights": [[...]]}}}]
+        self.expert_layer_history: List[Dict] = []
+
         # For metrics
         self.metrics_collector = metrics_collector
         self.time_stats: TimeStats = TimeStats(disagg_mode=disagg_mode)

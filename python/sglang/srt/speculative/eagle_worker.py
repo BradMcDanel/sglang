@@ -825,9 +825,10 @@ class EAGLEWorker(TpModelWorker):
         forward_batch_output = self.target_worker.forward_batch_generation(
             model_worker_batch, is_verify=True
         )
-        logits_output, can_run_cuda_graph = (
+        logits_output, can_run_cuda_graph, forward_batch = (
             forward_batch_output.logits_output,
             forward_batch_output.can_run_cuda_graph,
+            forward_batch_output.forward_batch,
         )
 
         vocab_mask = None
@@ -858,6 +859,7 @@ class EAGLEWorker(TpModelWorker):
             self.token_to_kv_pool_allocator,
             self.page_size,
             vocab_mask,
+            forward_batch,
         )
 
         # Post process based on verified outputs.

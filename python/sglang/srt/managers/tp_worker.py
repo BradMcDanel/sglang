@@ -274,6 +274,7 @@ class TpModelWorker:
                 logits_output=logits_output,
                 next_token_ids=next_token_ids,
                 can_run_cuda_graph=can_run_cuda_graph,
+                forward_batch=forward_batch,
             )
         else:
             pp_proxy_tensors, can_run_cuda_graph = self.model_runner.forward(

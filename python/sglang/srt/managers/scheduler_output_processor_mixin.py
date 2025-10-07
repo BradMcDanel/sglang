@@ -540,6 +540,8 @@ class SchedulerOutputProcessorMixin:
         completion_tokens = []
         cached_tokens = []
         spec_verify_ct = []
+        expert_layer_activations = []
+        expert_layer_history = []
         output_hidden_states = None
 
         if return_logprob:
@@ -631,6 +633,14 @@ class SchedulerOutputProcessorMixin:
 
                 if not self.spec_algorithm.is_none():
                     spec_verify_ct.append(req.spec_verify_ct)
+
+                # Append expert layer activations if available
+                expert_layer_activations.append(
+                    req.expert_layer_activations if req.expert_layer_activations else None
+                )
+                expert_layer_history.append(
+                    req.expert_layer_history if req.expert_layer_history else None
+                )
 
                 if return_logprob:
                     if (
@@ -731,6 +741,8 @@ class SchedulerOutputProcessorMixin:
                     completion_tokens,
                     cached_tokens,
                     spec_verify_ct,
+                    expert_layer_activations,
+                    expert_layer_history,
                     input_token_logprobs_val,
                     input_token_logprobs_idx,
                     output_token_logprobs_val,

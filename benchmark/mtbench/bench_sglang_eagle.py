@@ -105,6 +105,95 @@ def main(args):
     print(
         f"#questions: {len(questions)}, Throughput: {output_throughput:.2f} token/s, Acceptance length: {accept_length:.2f}"
     )
+    print(f"\nDEBUG: meta_info keys = {rets[0].get_meta_info('answer_1').keys()}")
+
+    # Print expert activation statistics if available
+    if "expert_layer_activations" in rets[0].get_meta_info("answer_1"):
+        print("\nExpert Activation Statistics:")
+        print("=" * 80)
+
+        # Aggregate expert activations across all requests
+        all_expert_activations = {}
+        for s in rets:
+            for answer_key in ["answer_1", "answer_2"]:
+                expert_acts = s.get_meta_info(answer_key).get("expert_layer_activations")
+                if expert_acts:
+                    for layer_id, counts in expert_acts.items():
+                        layer_id = int(layer_id)
+                        if layer_id not in all_expert_activations:
+                            all_expert_activations[layer_id] = [0] * len(counts)
+                        for i, count in enumerate(counts):
+                            all_expert_activations[layer_id][i] += count
+
+        # Print per-layer statistics
+        for layer_id in sorted(all_expert_activations.keys()):
+            counts = all_expert_activations[layer_id]
+            total = sum(counts)
+            if total > 0:
+                active_experts = sum(1 for c in counts if c > 0)
+                max_count = max(counts)
+                max_expert = counts.index(max_count)
+                print(f"Layer {layer_id}: {active_experts}/{len(counts)} experts active, "
+                      f"total={total}, max_expert={max_expert} (count={max_count})")
+
+    # Optionally display per-verify expert routing history for the first sample
+    sample_history = rets[0].get_meta_info("answer_1").get("expert_layer_history")
+    if sample_history:
+        print("\nExpert Activation History (first response):")
+        print("=" * 80)
+        for verify_idx, verify_snapshot in enumerate(sample_history):
+            print(f"Verify pass {verify_idx}:")
+
+            # Display tree structure metadata if available
+            if "tree_structure" in verify_snapshot:
+                tree = verify_snapshot["tree_structure"]
+                print(f"  Tree: {tree['draft_token_num']} tokens, {tree['spec_steps']} steps")
+                print(f"  Tree metadata: retrive_next_token shape={len(tree.get('retrive_next_token', []))}x{len(tree.get('retrive_next_token', [[]])[0]) if tree.get('retrive_next_token') else 0}")
+
+            # Display layer-wise expert activations
+            layer_map = verify_snapshot.get("layers", verify_snapshot)  # Support both old and new format
+            items = list(layer_map.items())
+            for layer_id_raw, layer_entry in items[:5]:
+                layer_id = int(layer_id_raw)
+                token_count = len(layer_entry.get("topk_ids", []))
+                sample_topk = layer_entry.get("topk_ids", [])[:1]
+                sample_weights = layer_entry.get("topk_weights")
+                sample_weights = sample_weights[:1] if sample_weights else []
+                preview = sample_topk[0] if sample_topk else []
+                print(
+                    f"  Layer {layer_id}: tokens={token_count}, sample_topk={preview}"
+                    + (f", weights={sample_weights[0]}" if sample_weights else "")
+                )
+            if verify_idx >= 2:
+                print("  ... (truncated)")
+                break
+
+    # Write expert activation logs if available
+    if "expert_layer_activations" in rets[0].get_meta_info("answer_1"):
+        expert_log_file = "expert_activations.json"
+        expert_logs = []
+
+        for i, s in enumerate(rets):
+            for turn_idx, answer_key in enumerate(["answer_1", "answer_2"]):
+                meta = s.get_meta_info(answer_key)
+                log_entry = {
+                    "question_id": questions[i]["question_id"],
+                    "turn": turn_idx + 1,
+                    "question": questions[i]["turns"][turn_idx],
+                    "answer": s[answer_key],
+                    "meta_info": {
+                        "prompt_tokens": meta.get("prompt_tokens"),
+                        "completion_tokens": meta.get("completion_tokens"),
+                        "spec_verify_ct": meta.get("spec_verify_ct"),
+                    },
+                    "expert_layer_activations": meta.get("expert_layer_activations"),
+                    "expert_layer_history": meta.get("expert_layer_history"),
+                }
+                expert_logs.append(log_entry)
+
+        with open(expert_log_file, "w") as f:
+            json.dump(expert_logs, f, indent=2)
+        print(f"\nExpert activation logs saved to: {expert_log_file}")
 
     # Write results
     model_id = backend.model_info["model_path"]

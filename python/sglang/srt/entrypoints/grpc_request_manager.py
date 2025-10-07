@@ -585,6 +585,24 @@ class GrpcRequestManager:
                 },
             }
 
+            if (
+                batch_out.expert_layer_activations
+                and i < len(batch_out.expert_layer_activations)
+                and batch_out.expert_layer_activations[i]
+            ):
+                output_data["meta_info"]["expert_layer_activations"] = (
+                    batch_out.expert_layer_activations[i]
+                )
+
+            if (
+                batch_out.expert_layer_history
+                and i < len(batch_out.expert_layer_history)
+                and batch_out.expert_layer_history[i]
+            ):
+                output_data["meta_info"]["expert_layer_history"] = (
+                    batch_out.expert_layer_history[i]
+                )
+
             # Accumulate logprobs (following tokenizer_manager pattern)
             if state.obj.return_logprob:
                 self._convert_logprob_style(state, batch_out, i)

@@ -2005,10 +2005,18 @@ class ModelRunner:
             if self.device == "cpu"
             else forward_batch.forward_mode.is_cuda_graph
         )
+
+        # Disable CUDA graphs when expert tracking is enabled to ensure fresh data collection
+        disable_graph_for_expert_tracking = (
+            forward_batch.expert_activations is not None
+            and forward_batch.forward_mode.is_target_verify()
+        )
+
         can_run_graph = bool(
             mode_check()
             and self.graph_runner
             and self.graph_runner.can_run(forward_batch)
+            and not disable_graph_for_expert_tracking
         )
 
         if can_run_graph:
@@ -2017,6 +2025,9 @@ class ModelRunner:
                 skip_attn_backend_init=skip_attn_backend_init,
                 pp_proxy_tensors=pp_proxy_tensors,
             )
+            # Collect expert activations after CUDA graph replay
+            if hasattr(self.model, 'collect_expert_activations'):
+                self.model.collect_expert_activations(forward_batch)
             return ret, can_run_graph
 
         # For MLP sync
@@ -2051,6 +2062,10 @@ class ModelRunner:
             and self.pp_group.is_last_rank
         ):
             forward_batch.post_forward_mlp_sync_batch(ret)
+
+        # Collect expert activations after forward pass (when not using CUDA graphs)
+        if not can_run_graph and hasattr(self.model, 'collect_expert_activations'):
+            self.model.collect_expert_activations(forward_batch)
 
         return ret, can_run_graph
 

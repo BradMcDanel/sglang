@@ -56,7 +56,11 @@ from sglang.srt.layers.utils import get_layer_id
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
+from sglang.srt.model_executor.forward_batch_info import (
+    ExpertActivationSnapshot,
+    ForwardBatch,
+    PPProxyTensors,
+)
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.qwen2_moe import Qwen2MoeMLP as Qwen3MoeMLP
 from sglang.srt.models.qwen2_moe import Qwen2MoeModel
@@ -90,6 +94,10 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         super().__init__()
         self.tp_size = get_tensor_model_parallel_world_size()
         self.layer_id = layer_id
+        # For expert activation tracking - stores last routing decision
+        self.last_topk_ids = None
+        self.last_topk_weights = None
+        self.last_num_experts = None
         if self.tp_size > config.num_experts:
             raise ValueError(
                 f"Tensor parallel size {self.tp_size} is greater than "
@@ -136,10 +144,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         should_allreduce_fusion: bool = False,
         use_reduce_scatter: bool = False,
     ) -> torch.Tensor:
-
         if not get_moe_a2a_backend().is_deepep():
             return self.forward_normal(
-                hidden_states, should_allreduce_fusion, use_reduce_scatter
+                hidden_states, forward_batch, should_allreduce_fusion, use_reduce_scatter
             )
         else:
             return self.forward_deepep(hidden_states, forward_batch)
@@ -154,6 +161,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
     def forward_normal(
         self,
         hidden_states: torch.Tensor,
+        forward_batch: Optional[ForwardBatch] = None,
         should_allreduce_fusion: bool = False,
         use_reduce_scatter: bool = False,
     ) -> torch.Tensor:
@@ -163,6 +171,23 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
         topk_output = self.topk(hidden_states, router_logits)
+
+        # Store routing outputs for post-forward expert tracking (works with CUDA graphs)
+        from sglang.srt.layers.moe.topk import TopKOutputChecker
+        is_standard = TopKOutputChecker.format_is_standard(topk_output)
+        if is_standard:
+            # Keep GPU tensors - will be copied to CPU after forward if needed
+            self.last_topk_ids = topk_output.topk_ids
+            self.last_topk_weights = topk_output.topk_weights
+            self.last_num_experts = self.gate.weight.shape[0]
+
+            # Debug disabled - too much noise
+            # if self.layer_id == 0 and forward_batch and forward_batch.expert_activations is not None:
+            #     import sys
+            #     print(f"[DEBUG forward_normal Layer 0] Token 0 experts: {topk_output.topk_ids[0].tolist()}", file=sys.stderr)
+        else:
+            self.last_topk_ids = None
+
         final_hidden_states = self.experts(hidden_states, topk_output)
         if (
             self.tp_size > 1
@@ -188,6 +213,12 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                     layer_id=self.layer_id,
                 ),
             )
+
+            # Store routing outputs for post-forward expert tracking
+            # Just store direct reference - the collection happens immediately after forward
+            self.last_topk_ids = topk_idx
+            self.last_topk_weights = topk_weights
+            self.last_num_experts = self.num_experts
         else:
             topk_idx = torch.full(
                 (0, self.top_k), -1, dtype=torch.int, device=hidden_states.device
@@ -700,6 +731,35 @@ class Qwen3MoeForCausalLM(nn.Module):
 
     def get_input_embeddings(self) -> nn.Embedding:
         return self.model.embed_tokens
+
+    def collect_expert_activations(self, forward_batch: ForwardBatch):
+        """Collect expert activations from MoE layers after forward pass.
+
+        This works with CUDA graphs because we read GPU tensors that were
+        updated during graph replay, then copy them to CPU.
+
+        Only runs when SGLANG_TRACK_EXPERT_ACTIVATIONS=1 is set.
+        """
+        if forward_batch.expert_activations is None:
+            return
+
+        # Only collect for TARGET_VERIFY (verify passes)
+        # Skip for DECODE/EXTEND to avoid overhead
+        if not forward_batch.forward_mode.is_target_verify():
+            return
+
+        for layer in self.model.layers:
+            if hasattr(layer, 'mlp') and isinstance(layer.mlp, Qwen3MoeSparseMoeBlock):
+                if layer.mlp.last_topk_ids is not None:
+                    # Copy GPU tensors to CPU after forward (async copy with non_blocking=True)
+                    topk_ids = layer.mlp.last_topk_ids.detach().to("cpu", non_blocking=True)
+                    topk_weights = layer.mlp.last_topk_weights.detach().to("cpu", non_blocking=True) if layer.mlp.last_topk_weights is not None else None
+
+                    forward_batch.expert_activations[layer.mlp.layer_id] = ExpertActivationSnapshot(
+                        topk_ids=topk_ids,
+                        num_experts=layer.mlp.last_num_experts,
+                        topk_weights=topk_weights,
+                    )
 
     @torch.no_grad()
     def forward(

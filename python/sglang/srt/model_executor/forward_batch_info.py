@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from enum import IntEnum, auto
 from functools import total_ordering
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+import logging
 
 import torch
 import triton
@@ -155,6 +156,15 @@ class CaptureHiddenMode(IntEnum):
 
     def __lt__(self, other):
         return self.value < other.value
+
+
+@dataclass
+class ExpertActivationSnapshot:
+    """Per-layer expert routing info captured during a forward pass."""
+
+    topk_ids: torch.Tensor
+    num_experts: int
+    topk_weights: Optional[torch.Tensor] = None
 
 
 @dataclass
@@ -303,6 +313,9 @@ class ForwardBatch:
     tbo_parent_token_range: Optional[Tuple[int, int]] = None
     tbo_children: Optional[List[ForwardBatch]] = None
 
+    # For tracking expert activations per layer (MoE models)
+    expert_activations: Optional[Dict[int, ExpertActivationSnapshot]] = None
+
     @classmethod
     def init_new(
         cls,
@@ -356,6 +369,13 @@ class ForwardBatch:
                 len(batch.input_ids), dtype=torch.int32
             ).to(device, non_blocking=True)
         ret.num_token_non_padded_cpu = len(batch.input_ids)
+
+        # Initialize expert activations tracking if enabled via environment variable
+        import os
+        if os.environ.get("SGLANG_TRACK_EXPERT_ACTIVATIONS", "0") == "1":
+            ret.expert_activations = {}
+        else:
+            ret.expert_activations = None
 
         # For MLP sync
         if batch.global_num_tokens is not None:
@@ -911,6 +931,7 @@ class ForwardBatchOutput:
     num_accepted_tokens: Optional[int] = None
     pp_proxy_tensors: Optional[PPProxyTensors] = None
     can_run_cuda_graph: bool = False
+    forward_batch: Optional[ForwardBatch] = None
 
 
 def enable_num_token_non_padded(server_args):

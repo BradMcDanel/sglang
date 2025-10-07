@@ -816,6 +816,10 @@ class BatchTokenIDOutput(BaseBatchReq):
     cached_tokens: List[int]
     spec_verify_ct: List[int]
 
+    # Expert activation tracking per layer (MoE models)
+    expert_layer_activations: List[Optional[Dict[int, List[int]]]]
+    expert_layer_history: List[Optional[List[Dict[int, Dict[str, List[List[float]]]]]]]
+
     # Logprobs
     input_token_logprobs_val: List[float]
     input_token_logprobs_idx: List[int]
@@ -881,6 +885,12 @@ class BatchStrOutput(BaseBatchReq):
     completion_tokens: List[int]
     cached_tokens: List[int]
     spec_verify_ct: List[int]
+
+    # Expert activation tracking per layer (MoE models)
+    expert_layer_activations: List[Optional[Dict[int, List[int]]]]
+    expert_layer_history: List[
+        Optional[List[Dict[int, Dict[str, List[List[float]]]]]]
+    ]
 
     # Logprobs
     input_token_logprobs_val: List[float]
