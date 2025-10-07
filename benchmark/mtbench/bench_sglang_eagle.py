@@ -172,6 +172,7 @@ def main(args):
     if "expert_layer_activations" in rets[0].get_meta_info("answer_1"):
         expert_log_file = "expert_activations.json"
         expert_logs = []
+        model_path = backend.model_info["model_path"]
 
         for i, s in enumerate(rets):
             for turn_idx, answer_key in enumerate(["answer_1", "answer_2"]):
@@ -182,6 +183,7 @@ def main(args):
                     "question": questions[i]["turns"][turn_idx],
                     "answer": s[answer_key],
                     "meta_info": {
+                        "model_path": model_path,
                         "prompt_tokens": meta.get("prompt_tokens"),
                         "completion_tokens": meta.get("completion_tokens"),
                         "spec_verify_ct": meta.get("spec_verify_ct"),

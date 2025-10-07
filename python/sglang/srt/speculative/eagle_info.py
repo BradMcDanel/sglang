@@ -390,6 +390,8 @@ class EagleVerifyInput(SpecInput):
                         "retrive_next_sibling": self.retrive_next_sibling.cpu().tolist(),
                         "retrive_index": self.retrive_index.cpu().tolist(),
                         "positions": self.positions.reshape(bs, self.draft_token_num).cpu().tolist(),
+                        "draft_tokens": self.draft_token.cpu().tolist(),
+                        "accept_index": accept_index_row,  # Accepted node indices for this request
                     },
                     "layers": {}
                 }
