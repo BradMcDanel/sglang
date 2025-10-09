@@ -68,7 +68,20 @@ def main(args):
     answers = [[s["answer_1"], s["answer_2"]] for s in rets]
     latency = time.perf_counter() - tic
 
-    print(f"#questions: {len(questions)}, Latency: {latency:.2f}")
+    # Calculate throughput
+    num_output_tokens = sum(
+        s.get_meta_info("answer_1")["completion_tokens"]
+        + s.get_meta_info("answer_2")["completion_tokens"]
+        for s in rets
+    )
+    output_throughput = num_output_tokens / latency
+
+    print(
+        f"#questions: {len(questions)}, Latency: {latency:.2f}s, "
+        f"Throughput: {output_throughput:.2f} token/s"
+    )
+    print(f"Total output tokens: {num_output_tokens}")
+    print(f"\nDEBUG: meta_info keys = {rets[0].get_meta_info('answer_1').keys()}")
 
     # Write results
     model_id = backend.model_info["model_path"]
