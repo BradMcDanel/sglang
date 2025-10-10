@@ -316,10 +316,6 @@ class ForwardBatch:
     # For tracking expert activations per layer (MoE models)
     expert_activations: Optional[Dict[int, ExpertActivationSnapshot]] = None
 
-    # For limiting unique experts per layer during speculative verification (MoE models)
-    limit_tree_experts: bool = False
-    max_tree_experts: int = 0
-
     @classmethod
     def init_new(
         cls,
@@ -380,14 +376,6 @@ class ForwardBatch:
             ret.expert_activations = {}
         else:
             ret.expert_activations = None
-
-        # Initialize expert limiting for speculative decoding if enabled
-        if os.environ.get("SGLANG_LIMIT_TREE_EXPERTS", "0") == "1":
-            ret.limit_tree_experts = True
-            ret.max_tree_experts = int(os.environ.get("SGLANG_MAX_TREE_EXPERTS", "128"))
-        else:
-            ret.limit_tree_experts = False
-            ret.max_tree_experts = 0
 
         # For MLP sync
         if batch.global_num_tokens is not None:

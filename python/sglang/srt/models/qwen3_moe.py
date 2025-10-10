@@ -59,7 +59,6 @@ from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 from sglang.srt.model_executor.forward_batch_info import (
     ExpertActivationSnapshot,
     ForwardBatch,
-    ForwardMode,
     PPProxyTensors,
 )
 from sglang.srt.model_loader.weight_utils import default_weight_loader
@@ -171,33 +170,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
-
-        # Apply expert limiting for speculative decoding if enabled
-        if (forward_batch and
-            forward_batch.limit_tree_experts and
-            forward_batch.forward_mode.is_target_verify()):
-
-            max_experts = forward_batch.max_tree_experts
-            num_experts = router_logits.shape[-1]
-
-            if max_experts < num_experts:
-                # Select top-N experts by aggregate routing score across all tokens in the tree
-                expert_scores = router_logits.sum(dim=0)  # [num_experts]
-                selected_experts = expert_scores.topk(max_experts).indices  # [max_experts]
-
-                # Create mask: True for selected experts, False otherwise
-                mask = torch.zeros(num_experts, dtype=torch.bool, device=router_logits.device)
-                mask[selected_experts] = True
-
-                # Mask out non-selected experts before TopK routing
-                masked_logits = router_logits.clone()
-                masked_logits[:, ~mask] = float('-inf')
-
-                topk_output = self.topk(hidden_states, masked_logits)
-            else:
-                topk_output = self.topk(hidden_states, router_logits)
-        else:
-            topk_output = self.topk(hidden_states, router_logits)
+        topk_output = self.topk(hidden_states, router_logits)
 
         # Store routing outputs for post-forward expert tracking (works with CUDA graphs)
         from sglang.srt.layers.moe.topk import TopKOutputChecker
@@ -232,53 +205,14 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         if hidden_states.shape[0] > 0:
             # router_logits: (num_tokens, n_experts)
             router_logits, _ = self.gate(hidden_states)
-
-            # Apply expert limiting for speculative decoding if enabled
-            if (forward_batch.limit_tree_experts and
-                forward_batch.forward_mode.is_target_verify()):
-
-                max_experts = forward_batch.max_tree_experts
-                num_experts = router_logits.shape[-1]
-
-                if max_experts < num_experts:
-                    # Select top-N experts by aggregate routing score across all tokens in the tree
-                    expert_scores = router_logits.sum(dim=0)  # [num_experts]
-                    selected_experts = expert_scores.topk(max_experts).indices  # [max_experts]
-
-                    # Create mask: True for selected experts, False otherwise
-                    mask = torch.zeros(num_experts, dtype=torch.bool, device=router_logits.device)
-                    mask[selected_experts] = True
-
-                    # Mask out non-selected experts before TopK routing
-                    masked_logits = router_logits.clone()
-                    masked_logits[:, ~mask] = float('-inf')
-
-                    topk_weights, topk_idx, _ = self.topk(
-                        hidden_states,
-                        masked_logits,
-                        num_token_non_padded=forward_batch.num_token_non_padded,
-                        expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                            layer_id=self.layer_id,
-                        ),
-                    )
-                else:
-                    topk_weights, topk_idx, _ = self.topk(
-                        hidden_states,
-                        router_logits,
-                        num_token_non_padded=forward_batch.num_token_non_padded,
-                        expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                            layer_id=self.layer_id,
-                        ),
-                    )
-            else:
-                topk_weights, topk_idx, _ = self.topk(
-                    hidden_states,
-                    router_logits,
-                    num_token_non_padded=forward_batch.num_token_non_padded,
-                    expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                        layer_id=self.layer_id,
-                    ),
-                )
+            topk_weights, topk_idx, _ = self.topk(
+                hidden_states,
+                router_logits,
+                num_token_non_padded=forward_batch.num_token_non_padded,
+                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
+                    layer_id=self.layer_id,
+                ),
+            )
 
             # Store routing outputs for post-forward expert tracking
             # Just store direct reference - the collection happens immediately after forward
@@ -313,38 +247,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         router_logits = state.pop("router_logits")
         hidden_states = state.hidden_states_mlp_input
         if router_logits is not None:
-            # Apply expert limiting for speculative decoding if enabled
-            if (state.forward_batch.limit_tree_experts and
-                state.forward_batch.forward_mode.is_target_verify()):
-
-                max_experts = state.forward_batch.max_tree_experts
-                num_experts = router_logits.shape[-1]
-
-                if self.layer_id == 10:
-                    import sys
-                    print(f"[Layer 10 op_select_experts] Limiting enabled! max_experts={max_experts}, num_experts={num_experts}",
-                          file=sys.stderr, flush=True)
-
-                if max_experts < num_experts:
-                    # Select top-N experts by aggregate routing score across all tokens in the tree
-                    expert_scores = router_logits.sum(dim=0)  # [num_experts]
-                    selected_experts = expert_scores.topk(max_experts).indices  # [max_experts]
-
-                    if self.layer_id == 10:
-                        import sys
-                        print(f"[Layer 10 op_select_experts] selected_experts={sorted(selected_experts.tolist())}",
-                              file=sys.stderr, flush=True)
-
-                    # Create mask: True for selected experts, False otherwise
-                    mask = torch.zeros(num_experts, dtype=torch.bool, device=router_logits.device)
-                    mask[selected_experts] = True
-
-                    # Mask out non-selected experts before TopK routing
-                    masked_logits = router_logits.clone()
-                    masked_logits[:, ~mask] = float('-inf')
-
-                    router_logits = masked_logits
-
             with get_global_expert_distribution_recorder().with_current_layer(
                 self.layer_id
             ):
